@@ -1,0 +1,233 @@
+{
+  "description": "Anthropic Messages checks (anthropic profile). Paths are relative to <base>/v1; headers x-api-key and anthropic-version are added automatically.",
+  "checks": [
+    {
+      "id": "anthropic.models.list",
+      "profile": ["anthropic"],
+      "title": "GET /v1/models returns a data array of {id}",
+      "severity": "warn",
+      "tags": ["models"],
+      "request": { "method": "GET", "path": "/models" },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "type", "path": "data", "is": "array" },
+        { "type": "every", "path": "data", "where": { "path": "id", "is": "string" } }
+      ],
+      "fix_hint": "Some Anthropic-format clients discover models through GET /v1/models with x-api-key + anthropic-version headers. Return {\"data\":[{\"id\":\"...\",\"type\":\"model\"}],\"has_more\":false}."
+    },
+    {
+      "id": "anthropic.models.contains_model",
+      "profile": ["anthropic"],
+      "title": "The tested model id is listed by /v1/models",
+      "severity": "warn",
+      "tags": ["models"],
+      "uses": "anthropic.models.list",
+      "assertions": [
+        { "type": "some", "path": "data", "where": { "path": "id", "equals": "{{model}}" } }
+      ],
+      "fix_hint": "List every model id callers can send to /v1/messages."
+    },
+    {
+      "id": "anthropic.basic",
+      "profile": ["anthropic"],
+      "title": "Non-stream message has type=message, content blocks and stop_reason",
+      "severity": "fail",
+      "tags": ["anthropic"],
+      "request": {
+        "method": "POST",
+        "path": "/messages",
+        "body": {
+          "model": "{{model}}",
+          "max_tokens": 16,
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }]
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "equals", "path": "type", "value": "message" },
+        { "type": "equals", "path": "role", "value": "assistant" },
+        { "type": "nonempty", "path": "content" },
+        { "type": "type", "path": "content[0].type", "is": "string" },
+        { "type": "type", "path": "stop_reason", "is": "string" }
+      ],
+      "fix_hint": "Return {\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"...\"}],\"stop_reason\":\"end_turn\",\"usage\":{...}}. Check that x-api-key and anthropic-version headers are accepted (not only Authorization: Bearer)."
+    },
+    {
+      "id": "anthropic.usage",
+      "profile": ["anthropic"],
+      "title": "Non-stream message reports usage input/output tokens",
+      "severity": "fail",
+      "tags": ["usage"],
+      "uses": "anthropic.basic",
+      "assertions": [
+        { "type": "type", "path": "usage.input_tokens", "is": "number" },
+        { "type": "type", "path": "usage.output_tokens", "is": "number" }
+      ],
+      "fix_hint": "Report usage.input_tokens and usage.output_tokens (and cache_* fields when caching is used). Claude-style clients use them for context and cost display."
+    },
+    {
+      "id": "anthropic.system_blocks",
+      "profile": ["anthropic"],
+      "title": "system as an array of text blocks with cache_control is accepted",
+      "severity": "warn",
+      "request": {
+        "method": "POST",
+        "path": "/messages",
+        "body": {
+          "model": "{{model}}",
+          "max_tokens": 16,
+          "system": [{ "type": "text", "text": "You are terse.", "cache_control": { "type": "ephemeral" } }],
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }]
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "nonempty", "path": "content" }
+      ],
+      "fix_hint": "Coding agents send system as a list of blocks with cache_control. Accept the array form; if the upstream has no prompt caching, ignore cache_control instead of rejecting it."
+    },
+    {
+      "id": "anthropic.stream.events",
+      "profile": ["anthropic"],
+      "title": "Stream uses named SSE events in the Messages order",
+      "severity": "fail",
+      "tags": ["stream"],
+      "request": {
+        "method": "POST",
+        "path": "/messages",
+        "body": {
+          "model": "{{model}}",
+          "max_tokens": 16,
+          "stream": true,
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }]
+        }
+      },
+      "evaluator": { "name": "sse_anthropic", "expect": ["content_type", "event_lines", "sequence"] },
+      "fix_hint": "Send `event: <type>` plus `data: {\"type\":\"<type>\",...}` for message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop (ping is optional). Anthropic streams do not use [DONE]."
+    },
+    {
+      "id": "anthropic.stream.stop_reason",
+      "profile": ["anthropic"],
+      "title": "message_delta carries stop_reason",
+      "severity": "fail",
+      "tags": ["stream"],
+      "uses": "anthropic.stream.events",
+      "evaluator": { "name": "sse_anthropic", "expect": ["stop_reason"] },
+      "fix_hint": "message_delta.delta.stop_reason (end_turn, max_tokens, tool_use, stop_sequence) tells agents whether to run tools or stop."
+    },
+    {
+      "id": "anthropic.stream.usage",
+      "profile": ["anthropic"],
+      "title": "Stream reports input tokens in message_start and output tokens in message_delta",
+      "severity": "warn",
+      "tags": ["usage"],
+      "uses": "anthropic.stream.events",
+      "evaluator": { "name": "sse_anthropic", "expect": ["usage"] },
+      "fix_hint": "Put usage.input_tokens in message_start.message.usage and the final usage.output_tokens in message_delta.usage."
+    },
+    {
+      "id": "anthropic.tools.call",
+      "profile": ["anthropic"],
+      "title": "Forced tool_choice returns a tool_use block",
+      "severity": "fail",
+      "tags": ["tools"],
+      "budget": "tool",
+      "request": {
+        "method": "POST",
+        "path": "/messages",
+        "body": {
+          "model": "{{model}}",
+          "max_tokens": 64,
+          "tools": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city.",
+              "input_schema": { "type": "object", "properties": { "city": { "type": "string" } }, "required": ["city"] }
+            }
+          ],
+          "tool_choice": { "type": "tool", "name": "get_weather" },
+          "messages": [{ "role": "user", "content": "What is the weather in Jakarta? Use the tool." }]
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "some", "path": "content", "where": { "path": "type", "equals": "tool_use" } },
+        { "type": "equals", "path": "stop_reason", "value": "tool_use" }
+      ],
+      "fix_hint": "Return a content block {\"type\":\"tool_use\",\"id\":\"toolu_...\",\"name\":\"get_weather\",\"input\":{...}} where input is an object, and stop_reason \"tool_use\"."
+    },
+    {
+      "id": "anthropic.tools.roundtrip",
+      "profile": ["anthropic"],
+      "title": "tool_result can be sent back and answered",
+      "severity": "fail",
+      "tags": ["tools"],
+      "uses": "anthropic.tools.call",
+      "evaluator": { "name": "anthropic_tool_roundtrip", "followup_max_tokens": 64 },
+      "fix_hint": "Accept a user turn with [{\"type\":\"tool_result\",\"tool_use_id\":...,\"content\":...}] after the assistant tool_use turn, and keep tool_use_id intact through any format translation."
+    },
+    {
+      "id": "anthropic.errors.bad_model",
+      "profile": ["anthropic"],
+      "title": "Unknown model gives 4xx with an Anthropic-style JSON error",
+      "severity": "fail",
+      "tags": ["errors"],
+      "request": {
+        "method": "POST",
+        "path": "/messages",
+        "body": {
+          "model": "{{bad_model}}",
+          "max_tokens": 16,
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }]
+        }
+      },
+      "assertions": [
+        { "type": "status", "min": 400, "max": 499 },
+        { "type": "json" },
+        {
+          "type": "any_of",
+          "message": "no error message field",
+          "assertions": [
+            { "type": "type", "path": "error.message", "is": "string" },
+            { "type": "type", "path": "message", "is": "string" }
+          ]
+        }
+      ],
+      "fix_hint": "Return 404 (or 400) with {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"...\"}}. Never an HTML page or a 5xx."
+    },
+    {
+      "id": "anthropic.errors.bad_key",
+      "profile": ["anthropic"],
+      "title": "Invalid x-api-key gives 401/403 with a JSON error",
+      "severity": "warn",
+      "tags": ["errors"],
+      "request": {
+        "method": "POST",
+        "path": "/messages",
+        "auth": "invalid",
+        "body": {
+          "model": "{{model}}",
+          "max_tokens": 16,
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }]
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [401, 403] },
+        { "type": "json" },
+        {
+          "type": "any_of",
+          "message": "no error message field",
+          "assertions": [
+            { "type": "type", "path": "error.message", "is": "string" },
+            { "type": "type", "path": "message", "is": "string" }
+          ]
+        }
+      ],
+      "fix_hint": "Return 401 with {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"...\"}} and never echo the key."
+    }
+  ]
+}

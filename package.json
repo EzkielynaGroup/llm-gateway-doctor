@@ -1,0 +1,51 @@
+{
+  "name": "llm-gateway-doctor",
+  "version": "0.1.0",
+  "description": "Conformance checks for OpenAI- and Anthropic-compatible LLM endpoints: streaming, tool calls, usage, errors. Terminal, JSON, HTML report and SVG badge.",
+  "type": "module",
+  "bin": {
+    "llm-gateway-doctor": "bin/llm-gateway-doctor.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "checks/",
+    "presets.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "openai-compatible",
+    "anthropic",
+    "llm",
+    "llm-gateway",
+    "api-gateway",
+    "conformance",
+    "compatibility",
+    "sse",
+    "streaming",
+    "tool-calling",
+    "function-calling",
+    "cli",
+    "vllm",
+    "ollama",
+    "litellm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EzkielynaGroup/llm-gateway-doctor.git"
+  },
+  "homepage": "https://github.com/EzkielynaGroup/llm-gateway-doctor#readme",
+  "bugs": {
+    "url": "https://github.com/EzkielynaGroup/llm-gateway-doctor/issues"
+  },
+  "author": "Ezekiel Lieberhart (Ezkielyna)",
+  "license": "MIT"
+}

@@ -1,0 +1,143 @@
+{
+  "description": "Tool-calling checks on chat completions (agent profile). Tool checks may use up to 64 output tokens (budget: tool).",
+  "checks": [
+    {
+      "id": "agent.tools.call",
+      "profile": ["agent"],
+      "title": "Forced tool call returns tool_calls with JSON-string arguments",
+      "severity": "fail",
+      "tags": ["tools"],
+      "budget": "tool",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "What is the weather in Jakarta? Use the tool." }],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a city.",
+                "parameters": {
+                  "type": "object",
+                  "properties": { "city": { "type": "string" } },
+                  "required": ["city"]
+                }
+              }
+            }
+          ],
+          "tool_choice": { "type": "function", "function": { "name": "get_weather" } },
+          "max_tokens": 64
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "nonempty", "path": "choices[0].message.tool_calls" },
+        { "type": "type", "path": "choices[0].message.tool_calls[0].id", "is": "string" },
+        { "type": "equals", "path": "choices[0].message.tool_calls[0].type", "value": "function" },
+        { "type": "equals", "path": "choices[0].message.tool_calls[0].function.name", "value": "get_weather" },
+        { "type": "json_string", "path": "choices[0].message.tool_calls[0].function.arguments" },
+        { "type": "one_of", "path": "choices[0].finish_reason", "values": ["tool_calls", "stop"] }
+      ],
+      "fix_hint": "function.arguments must be a JSON-encoded string (\"{\\\"city\\\":\\\"Jakarta\\\"}\"), not an object. Upstreams with a native tool format (Anthropic, Gemini) return objects; the gateway must JSON.stringify them. Also honour named tool_choice."
+    },
+    {
+      "id": "agent.tools.roundtrip",
+      "profile": ["agent"],
+      "title": "Tool result can be sent back (assistant tool_calls + role=tool)",
+      "severity": "fail",
+      "tags": ["tools"],
+      "uses": "agent.tools.call",
+      "evaluator": { "name": "tool_roundtrip", "followup_max_tokens": 64 },
+      "fix_hint": "Accept an assistant message with content null plus tool_calls, followed by {role:\"tool\", tool_call_id, content}. Keep tool_call_id intact when translating to other formats (Anthropic tool_use_id)."
+    },
+    {
+      "id": "agent.tools.stream",
+      "profile": ["agent"],
+      "title": "Streamed tool call: every delta has index, arguments are string fragments",
+      "severity": "fail",
+      "tags": ["tools", "stream"],
+      "budget": "tool",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "What is the weather in Jakarta? Use the tool." }],
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a city.",
+                "parameters": {
+                  "type": "object",
+                  "properties": { "city": { "type": "string" } },
+                  "required": ["city"]
+                }
+              }
+            }
+          ],
+          "tool_choice": { "type": "function", "function": { "name": "get_weather" } },
+          "max_tokens": 64,
+          "stream": true
+        }
+      },
+      "evaluator": { "name": "sse_tool_call" },
+      "fix_hint": "Each delta.tool_calls[] item needs a numeric index (clients merge fragments by index). Send id, type and function.name on the first fragment and function.arguments as string pieces that join into valid JSON."
+    },
+    {
+      "id": "agent.replay.tool_calls_null",
+      "profile": ["agent"],
+      "title": "History with assistant tool_calls: null is accepted",
+      "severity": "warn",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [
+            { "role": "user", "content": "Say OK." },
+            { "role": "assistant", "content": "OK", "tool_calls": null },
+            { "role": "user", "content": "Reply with the single word OK." }
+          ],
+          "max_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "nonempty", "path": "choices" }
+      ],
+      "fix_hint": "Several agent frameworks replay history with \"tool_calls\": null on plain assistant turns. A gateway should drop null/empty tool_calls before forwarding instead of returning 400."
+    },
+    {
+      "id": "agent.replay.tool_calls_empty",
+      "profile": ["agent"],
+      "title": "History with assistant tool_calls: [] is accepted",
+      "severity": "warn",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [
+            { "role": "user", "content": "Say OK." },
+            { "role": "assistant", "content": "OK", "tool_calls": [] },
+            { "role": "user", "content": "Reply with the single word OK." }
+          ],
+          "max_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "nonempty", "path": "choices" }
+      ],
+      "fix_hint": "Some upstreams (including OpenAI itself) reject an empty tool_calls array. Clients should omit the field; gateways can strip it to be tolerant. A warning here is common and not fatal."
+    }
+  ]
+}

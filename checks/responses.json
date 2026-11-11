@@ -1,0 +1,90 @@
+{
+  "description": "OpenAI Responses API checks (responses profile, basic only in v0.1). The models.* checks from chat.json also run.",
+  "checks": [
+    {
+      "id": "responses.basic",
+      "profile": ["responses"],
+      "title": "POST /responses returns object=response with an output array",
+      "severity": "fail",
+      "tags": ["responses"],
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "body": {
+          "model": "{{model}}",
+          "input": "Reply with the single word OK.",
+          "max_output_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "equals", "path": "object", "value": "response" },
+        { "type": "type", "path": "output", "is": "array" },
+        { "type": "one_of", "path": "status", "values": ["completed", "incomplete"] }
+      ],
+      "fix_hint": "Implement POST /v1/responses with {\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"...\"}]}]}. Codex-style clients need this endpoint, not chat completions."
+    },
+    {
+      "id": "responses.usage",
+      "profile": ["responses"],
+      "title": "Response reports usage.input_tokens / output_tokens",
+      "severity": "warn",
+      "tags": ["usage"],
+      "uses": "responses.basic",
+      "assertions": [
+        { "type": "type", "path": "usage.input_tokens", "is": "number" },
+        { "type": "type", "path": "usage.output_tokens", "is": "number" }
+      ],
+      "fix_hint": "The Responses API names usage fields input_tokens/output_tokens (not prompt_tokens/completion_tokens). Translate them when proxying chat-completions upstreams."
+    },
+    {
+      "id": "responses.stream",
+      "profile": ["responses"],
+      "title": "Stream runs response.created ... response.completed with usage",
+      "severity": "fail",
+      "tags": ["stream"],
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "body": {
+          "model": "{{model}}",
+          "input": "Reply with the single word OK.",
+          "max_output_tokens": 16,
+          "stream": true
+        }
+      },
+      "evaluator": { "name": "sse_responses" },
+      "fix_hint": "Emit typed events (event: response.created, response.output_text.delta, ..., response.completed) with data.type equal to the event name; put usage in the final response object."
+    },
+    {
+      "id": "responses.errors.bad_model",
+      "profile": ["responses"],
+      "title": "Unknown model gives 4xx with a JSON error message",
+      "severity": "fail",
+      "tags": ["errors"],
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "body": {
+          "model": "{{bad_model}}",
+          "input": "Reply with the single word OK.",
+          "max_output_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "min": 400, "max": 499 },
+        { "type": "json" },
+        {
+          "type": "any_of",
+          "message": "no error message field",
+          "assertions": [
+            { "type": "type", "path": "error.message", "is": "string" },
+            { "type": "type", "path": "message", "is": "string" }
+          ]
+        }
+      ],
+      "fix_hint": "Return 400/404 with {\"error\":{\"message\":\"...\",\"type\":\"invalid_request_error\"}}; never an HTML page or a 5xx."
+    }
+  ]
+}

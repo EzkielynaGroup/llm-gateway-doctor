@@ -1,0 +1,89 @@
+{
+  "description": "Base URLs as published in each vendor's public documentation (read 12 Nov 2026; docs links below). Alphabetical. Presets only fill --base-url, --profile and the key variable name; nothing is a default. If a URL changed, please open an issue or PR.",
+  "presets": [
+    {
+      "name": "anthropic",
+      "label": "Anthropic",
+      "docs": "https://platform.claude.com/docs/en/api/overview",
+      "profile": "anthropic",
+      "anthropic_base_url": "https://api.anthropic.com",
+      "key_env": "ANTHROPIC_API_KEY"
+    },
+    {
+      "name": "deepseek",
+      "label": "DeepSeek",
+      "docs": "https://api-docs.deepseek.com/",
+      "profile": "chat",
+      "openai_base_url": "https://api.deepseek.com",
+      "anthropic_base_url": "https://api.deepseek.com/anthropic",
+      "key_env": "DEEPSEEK_API_KEY"
+    },
+    {
+      "name": "ezkielyna",
+      "label": "Ezkielyna",
+      "docs": "https://ezkielyna.store/?utm_source=github&utm_medium=readme&utm_campaign=llm-gateway-doctor",
+      "profile": "chat",
+      "openai_base_url": "https://api.ezkielyna.store/v1",
+      "anthropic_base_url": "https://api.ezkielyna.store",
+      "key_env": "EZKIELYNA_API_KEY"
+    },
+    {
+      "name": "groq",
+      "label": "Groq",
+      "docs": "https://console.groq.com/docs/openai",
+      "profile": "chat",
+      "openai_base_url": "https://api.groq.com/openai/v1",
+      "key_env": "GROQ_API_KEY"
+    },
+    {
+      "name": "litellm",
+      "label": "LiteLLM proxy (local)",
+      "docs": "https://docs.litellm.ai/docs/proxy/quick_start",
+      "profile": "chat",
+      "openai_base_url": "http://localhost:4000",
+      "anthropic_base_url": "http://localhost:4000",
+      "key_env": "OPENAI_API_KEY"
+    },
+    {
+      "name": "ollama",
+      "label": "Ollama (local)",
+      "docs": "https://docs.ollama.com/api/openai-compatibility",
+      "profile": "chat",
+      "openai_base_url": "http://localhost:11434/v1",
+      "key_env": "OPENAI_API_KEY"
+    },
+    {
+      "name": "openai",
+      "label": "OpenAI",
+      "docs": "https://platform.openai.com/docs/api-reference/introduction",
+      "profile": "chat",
+      "openai_base_url": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY"
+    },
+    {
+      "name": "openrouter",
+      "label": "OpenRouter",
+      "docs": "https://openrouter.ai/docs/quickstart",
+      "profile": "chat",
+      "openai_base_url": "https://openrouter.ai/api/v1",
+      "key_env": "OPENROUTER_API_KEY"
+    },
+    {
+      "name": "together",
+      "label": "Together AI",
+      "docs": "https://docs.together.ai/docs/openai-api-compatibility",
+      "profile": "chat",
+      "openai_base_url": "https://api.together.ai/v1",
+      "key_env": "TOGETHER_API_KEY"
+    },
+    {
+      "name": "vllm",
+      "label": "vLLM (local)",
+      "docs": "https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/",
+      "profile": "chat",
+      "openai_base_url": "http://localhost:8000/v1",
+      "anthropic_base_url": "http://localhost:8000",
+      "key_env": "OPENAI_API_KEY"
+    }
+  ]
+}

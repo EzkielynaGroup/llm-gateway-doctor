@@ -1,0 +1,275 @@
+{
+  "description": "OpenAI chat-completions checks. Used by the chat and agent profiles (models checks also by responses). Paths are relative to the base URL, which normally ends in /v1.",
+  "checks": [
+    {
+      "id": "models.list",
+      "profile": ["chat", "agent", "responses"],
+      "title": "GET /models returns a list of {id} objects",
+      "severity": "fail",
+      "tags": ["models"],
+      "request": { "method": "GET", "path": "/models" },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "type", "path": "data", "is": "array" },
+        { "type": "nonempty", "path": "data" },
+        { "type": "every", "path": "data", "where": { "path": "id", "is": "string" } }
+      ],
+      "fix_hint": "Many clients (IDE plugins, chat UIs, agent CLIs) discover models through GET /v1/models. Return {\"object\":\"list\",\"data\":[{\"id\":\"...\",\"object\":\"model\"}]}, behind the same auth as chat."
+    },
+    {
+      "id": "models.contains_model",
+      "profile": ["chat", "agent", "responses"],
+      "title": "The tested model id is listed by /models",
+      "severity": "warn",
+      "tags": ["models"],
+      "uses": "models.list",
+      "assertions": [
+        { "type": "some", "path": "data", "where": { "path": "id", "equals": "{{model}}" } }
+      ],
+      "fix_hint": "Clients that validate the model against /models will refuse it. List every routable model id exactly as callers must send it (case and prefix included)."
+    },
+    {
+      "id": "chat.basic",
+      "profile": ["chat", "agent"],
+      "title": "Non-stream completion has choices[0].message.content",
+      "severity": "fail",
+      "tags": ["chat"],
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+          "max_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "nonempty", "path": "choices" },
+        { "type": "equals", "path": "choices[0].message.role", "value": "assistant" },
+        { "type": "type", "path": "choices[0].message.content", "is": "string" },
+        { "type": "type", "path": "choices[0].finish_reason", "is": "string" }
+      ],
+      "fix_hint": "Return {\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"...\"},\"finish_reason\":\"stop\"}]}. If max_tokens is rejected, the endpoint expects max_completion_tokens only (see chat.max_completion_tokens); most clients still send max_tokens, so accept both."
+    },
+    {
+      "id": "chat.usage",
+      "profile": ["chat", "agent"],
+      "title": "Non-stream response reports usage tokens",
+      "severity": "fail",
+      "tags": ["usage"],
+      "uses": "chat.basic",
+      "assertions": [
+        { "type": "type", "path": "usage", "is": "object" },
+        { "type": "type", "path": "usage.prompt_tokens", "is": "number" },
+        { "type": "type", "path": "usage.completion_tokens", "is": "number" },
+        { "type": "type", "path": "usage.total_tokens", "is": "number" }
+      ],
+      "fix_hint": "Cost trackers and rate limiters read usage.prompt_tokens / completion_tokens / total_tokens. If the upstream omits usage, count tokens at the gateway rather than dropping the field."
+    },
+    {
+      "id": "chat.envelope",
+      "profile": ["chat", "agent"],
+      "title": "Response has id, object=chat.completion and created",
+      "severity": "warn",
+      "tags": ["chat"],
+      "uses": "chat.basic",
+      "assertions": [
+        { "type": "type", "path": "id", "is": "string" },
+        { "type": "equals", "path": "object", "value": "chat.completion" },
+        { "type": "type", "path": "created", "is": "number" }
+      ],
+      "fix_hint": "Strict SDKs (typed clients in Go, Rust, Java) fail to decode a response without id/object/created. Fill them even when the upstream does not."
+    },
+    {
+      "id": "chat.reasoning.dialect",
+      "profile": ["chat", "agent"],
+      "title": "Reasoning dialect (informational)",
+      "severity": "info",
+      "uses": "chat.basic",
+      "evaluator": { "name": "reasoning_dialect" },
+      "fix_hint": "There is no single standard: DeepSeek-style APIs use message.reasoning_content, some routers use message.reasoning or reasoning_details. Do not inline <think> tags in content; clients will show them. Document which field you emit."
+    },
+    {
+      "id": "chat.stream.framing",
+      "profile": ["chat", "agent"],
+      "title": "Stream is SSE: text/event-stream, data: lines, JSON chunks",
+      "severity": "fail",
+      "tags": ["stream"],
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+          "max_tokens": 16,
+          "stream": true
+        }
+      },
+      "evaluator": { "name": "sse_openai", "expect": ["content_type", "data_lines", "chunks_json"] },
+      "fix_hint": "Send Content-Type: text/event-stream and one `data: {json}` line per chunk followed by a blank line. Do not buffer the whole answer, do not send raw JSON lines (NDJSON), and flush after every event (turn off proxy buffering, e.g. `X-Accel-Buffering: no` behind nginx)."
+    },
+    {
+      "id": "chat.stream.done",
+      "profile": ["chat", "agent"],
+      "title": "Stream ends with data: [DONE]",
+      "severity": "fail",
+      "tags": ["stream"],
+      "uses": "chat.stream.framing",
+      "evaluator": { "name": "sse_openai", "expect": ["done"] },
+      "fix_hint": "OpenAI SDKs and many hand-written clients stop reading only at `data: [DONE]`. Without it they hang until the socket closes or treat the answer as truncated. Always send it last, also after errors mid-stream."
+    },
+    {
+      "id": "chat.stream.finish_reason",
+      "profile": ["chat", "agent"],
+      "title": "A stream chunk carries finish_reason",
+      "severity": "fail",
+      "tags": ["stream"],
+      "uses": "chat.stream.framing",
+      "evaluator": { "name": "sse_openai", "expect": ["finish_reason"] },
+      "fix_hint": "The last content chunk must set choices[0].finish_reason (stop, length, tool_calls, content_filter). Agents use it to decide whether to continue or run tools."
+    },
+    {
+      "id": "chat.stream.usage",
+      "profile": ["chat", "agent"],
+      "title": "stream_options.include_usage yields a usage chunk",
+      "severity": "warn",
+      "tags": ["usage"],
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+          "max_tokens": 16,
+          "stream": true,
+          "stream_options": { "include_usage": true }
+        }
+      },
+      "evaluator": { "name": "sse_openai", "expect": ["usage"] },
+      "fix_hint": "With stream_options.include_usage=true, send one extra chunk before [DONE] with \"choices\": [] and a usage object. Without it, streaming clients cannot show or bill token counts."
+    },
+    {
+      "id": "chat.max_completion_tokens",
+      "profile": ["chat", "agent"],
+      "title": "max_completion_tokens is accepted",
+      "severity": "warn",
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+          "max_completion_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "nonempty", "path": "choices" }
+      ],
+      "fix_hint": "Newer OpenAI SDKs and reasoning-model clients send max_completion_tokens instead of max_tokens. Accept both and map to whatever the upstream understands."
+    },
+    {
+      "id": "chat.response_format.json_object",
+      "profile": ["chat", "agent"],
+      "title": "response_format {type: json_object} is accepted",
+      "severity": "warn",
+      "tags": ["json"],
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{model}}",
+          "messages": [
+            { "role": "system", "content": "You reply only with compact JSON." },
+            { "role": "user", "content": "Return the JSON object {\"ok\":true} and nothing else." }
+          ],
+          "response_format": { "type": "json_object" },
+          "max_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [200] },
+        { "type": "json" },
+        { "type": "type", "path": "choices[0].message.content", "is": "string" }
+      ],
+      "fix_hint": "Pass response_format through to the upstream, or drop it explicitly if unsupported; rejecting the request breaks structured-output libraries."
+    },
+    {
+      "id": "chat.response_format.valid_json",
+      "profile": ["chat", "agent"],
+      "title": "json_object mode returns parseable JSON",
+      "severity": "warn",
+      "tags": ["json"],
+      "uses": "chat.response_format.json_object",
+      "assertions": [
+        { "type": "json_string", "path": "choices[0].message.content" }
+      ],
+      "fix_hint": "Content should be bare JSON: no Markdown code fences, no prose. A reasoning model may spend all 16 test tokens thinking; if so, re-run with a non-reasoning model to confirm."
+    },
+    {
+      "id": "chat.errors.bad_model",
+      "profile": ["chat", "agent"],
+      "title": "Unknown model gives 4xx with a JSON error message",
+      "severity": "fail",
+      "tags": ["errors"],
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "body": {
+          "model": "{{bad_model}}",
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+          "max_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "min": 400, "max": 499 },
+        { "type": "json" },
+        {
+          "type": "any_of",
+          "message": "no error message field",
+          "assertions": [
+            { "type": "type", "path": "error.message", "is": "string" },
+            { "type": "type", "path": "error", "is": "string" },
+            { "type": "type", "path": "message", "is": "string" }
+          ]
+        }
+      ],
+      "fix_hint": "Return 400 or 404 with {\"error\":{\"message\":\"model ... not found\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}. A 5xx makes clients retry forever; an HTML page (often from a proxy or CDN) cannot be parsed."
+    },
+    {
+      "id": "chat.errors.bad_key",
+      "profile": ["chat", "agent"],
+      "title": "Invalid key gives 401/403 with a JSON error message",
+      "severity": "warn",
+      "tags": ["errors"],
+      "request": {
+        "method": "POST",
+        "path": "/chat/completions",
+        "auth": "invalid",
+        "body": {
+          "model": "{{model}}",
+          "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+          "max_tokens": 16
+        }
+      },
+      "assertions": [
+        { "type": "status", "in": [401, 403] },
+        { "type": "json" },
+        {
+          "type": "any_of",
+          "message": "no error message field",
+          "assertions": [
+            { "type": "type", "path": "error.message", "is": "string" },
+            { "type": "type", "path": "error", "is": "string" },
+            { "type": "type", "path": "message", "is": "string" }
+          ]
+        }
+      ],
+      "fix_hint": "Return 401 with {\"error\":{\"message\":\"invalid api key\",\"type\":\"authentication_error\"}} and never echo the key back. A local server with no auth will show this as a warning; that is expected."
+    }
+  ]
+}
